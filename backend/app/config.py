@@ -1,10 +1,16 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
+from pathlib import Path
 
-DB_PATH = os.getenv("DB_PATH", "reservecmu.db")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = os.getenv("DATA_DIR", str(BASE_DIR / "data"))
+# DEMO_MODE=1: at startup, if there is no availability for today, load the saved sample files and label them as today. Testing only.
+DEMO_MODE = os.getenv("DEMO_MODE", "0") == "1"
+DB_PATH = os.getenv("DB_PATH", str(Path(__file__).resolve().parent.parent / "reservecmu.db"))  # always backend/reservecmu.db
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # any tool-calling model
+OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "1000"))  # cap per model call; without it OpenRouter reserves the model max and can fail with 402
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Deep link into 25Live. VERIFY this pattern against a real space page before launch.
 LIVE25_SPACE_URL = os.getenv("LIVE25_SPACE_URL", "https://25live.collegenet.com/pro/cmu#!/home/space/{id}/detail")

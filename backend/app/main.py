@@ -1,4 +1,4 @@
-import asyncio, logging
+import asyncio, logging, os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Literal, Optional
@@ -6,11 +6,20 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from . import agent, config, db, refresh
+from . import agent, config, db, ingest, refresh
 from .search import AMENITIES, SearchParams, search
 
 @asynccontextmanager
 async def lifespan(_):
+    if config.DEMO_MODE:   # sample data stamped as today so the app is usable without a live 25Live fetch
+        c = db.connect(); db.init(c); today = now_local().date().isoformat()
+        if not c.execute("SELECT 1 FROM availability_dates WHERE date>=?", (today,)).fetchone():
+            ingest.ingest(os.path.join(config.DATA_DIR, "raw_pages.txt"), os.path.join(config.DATA_DIR, "availability.txt"), c, as_date=today)
+            log.warning("DEMO MODE: loaded saved sample availability as %s. These free times are NOT real.", today)
+        c.close()
+    try:
+        c = db.connect(); log.info("database %s: %d spaces, availability dates %s", config.DB_PATH, c.execute("SELECT COUNT(*) FROM spaces").fetchone()[0], [r[0] for r in c.execute("SELECT date FROM availability_dates")]); c.close()
+    except Exception as e: log.warning("database not ready: %s (run python -m app.ingest ...)", e)
     task = asyncio.create_task(refresh.loop()) if config.REFRESH_ENABLED else None
     yield
     if task: task.cancel()
@@ -29,6 +38,8 @@ def health(): return {"ok": True}
 def meta(conn: Db):
     q = lambda s: [r[0] for r in conn.execute(s)]
     return {"availability_dates": q("SELECT date FROM availability_dates"),
+            "demo_mode": config.DEMO_MODE, "today": now_local().date().isoformat(),
+            "has_current_data": bool(conn.execute("SELECT 1 FROM availability_dates WHERE date>=?", (now_local().date().isoformat(),)).fetchone()),
             "availability_as_of": {r[0]: r[1] for r in conn.execute("SELECT date, fetched_at FROM availability_dates")},
             "refresh": refresh.status | {"enabled": config.REFRESH_ENABLED, "interval_seconds": config.REFRESH_SECONDS}, "space_types": q("SELECT DISTINCT space_type FROM spaces ORDER BY 1"),
             "buildings": q("SELECT DISTINCT building FROM spaces ORDER BY 1"), "amenities": AMENITIES,
@@ -56,6 +67,9 @@ class AgentIn(BaseModel):
 async def recommend(body: AgentIn, conn: Db):
     n = now_local()
     dates = {r[0]: r[1] for r in conn.execute("SELECT date, fetched_at FROM availability_dates")}
+    if not any(d >= n.date().isoformat() for d in dates):   # nothing for today or later: say so instead of "nothing matched"
+        latest = f" (the newest data is for {max(dates)})" if dates else ""
+        return {"summary": f"Availability for today hasn’t been loaded yet{latest}, so I can’t tell what’s free right now. Please check back soon, or look in 25Live directly.", "recommendations": []}
     try:
         return await agent.recommend(conn, body.query, n.date().isoformat(), n.strftime("%H:%M"), dates, body.affiliation)
     except RuntimeError as e: raise HTTPException(503, str(e))

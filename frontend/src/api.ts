@@ -8,7 +8,7 @@ export interface Space {
 }
 export interface Meta {
   space_types: string[]; buildings: string[]; amenities: string[]; affiliations: string[]
-  availability_as_of: Record<string, string>; counts: { spaces: number; with_availability: number }
+  availability_as_of: Record<string, string>; today: string; has_current_data: boolean; demo_mode?: boolean; counts: { spaces: number; with_availability: number }
 }
 export interface Filters {
   space_types?: string[]; building?: string; min_capacity?: number; amenities?: string[]; table_type?: string
@@ -16,7 +16,7 @@ export interface Filters {
   affiliation?: string; limit: number
 }
 export interface Recommendation { space: Space; reason: string }
-export interface AgentReply { summary: string; recommendations: Recommendation[] }
+export interface AgentReply { summary: string; recommendations: Recommendation[]; trace?: { filters: Record<string, unknown>; matches?: number; error?: string }[] }
 
 export class ApiError extends Error {
   status: number

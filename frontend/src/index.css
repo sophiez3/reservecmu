@@ -72,3 +72,5 @@ fieldset button { margin-right:6px }
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:12px 20px; border-radius:999px; font-size:14px; z-index:40 }
 @media (max-width:640px) { .ask { flex-direction:column; border-radius:20px; padding:12px } .ask input { padding:6px 4px } .hero { padding-top:40px } }
 @media (prefers-reduced-motion:no-preference) { .space-card { transition:border-color .15s } .space-card:hover { border-color:#c9c8c0 } }
+
+.notice.demo { margin:0; border-radius:0; text-align:center }

@@ -124,6 +124,7 @@ export default function App() {
         </div>
       </header>
 
+      {meta?.demo_mode && <p className="notice demo">Demo mode: availability is saved sample data labeled as today, not real. Don’t use it to plan a booking.</p>}
       <main id="top">
         <section className="hero">
           <div className="hero-inner">
@@ -145,7 +146,8 @@ export default function App() {
             {ai && <>
               <p className="summary">{ai.summary}</p>
               <div className="grid">{ai.recommendations.map((r) => <SpaceCard key={r.space.id} s={r.space} reason={r.reason} onReserve={reserved} />)}</div>
-              {!ai.recommendations.length && <p className="muted">Nothing matched. Try a different time or a smaller group, or browse below.</p>}
+              {!ai.recommendations.length && meta?.has_current_data !== false && <p className="muted">Nothing matched. Try a different time or a smaller group, or browse below.</p>}
+              {!ai.recommendations.length && ai.trace && ai.trace.length > 0 && <details className="muted"><summary>What I searched</summary>{ai.trace.map((t, i) => <p key={i}>{JSON.stringify(t.filters)} → {t.error ?? `${t.matches} matches`}</p>)}</details>}
             </>}
           </section>
         )}
@@ -153,6 +155,7 @@ export default function App() {
         <section className="content">
           <div className="section-head"><h2>Browse every space</h2>
             <p className="muted">{meta ? `${meta.counts.spaces} spaces` : ''}{mins !== null ? `, availability updated ${mins} min ago` : ''}. Noise, light and temperature come from student ratings, so many spaces don’t have them yet.</p></div>
+          {meta && !meta.has_current_data && <p className="notice">Today’s availability hasn’t been loaded yet, so no spaces can be shown as free. Please check back soon.</p>}
           <div className="filters">
             <label>Type<select onChange={(e) => set({ space_types: e.target.value ? [e.target.value] : undefined })}><option value="">Any</option>{meta?.space_types.map((t) => <option key={t}>{t}</option>)}</select></label>
             <label>Building<select onChange={(e) => set({ building: e.target.value || undefined })}><option value="">Any</option>{meta?.buildings.map((b) => <option key={b}>{b}</option>)}</select></label>

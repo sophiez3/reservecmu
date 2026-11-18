@@ -81,13 +81,13 @@ def load_spaces(conn, list_pages):
         conn.execute(f"UPDATE spaces SET active=0 WHERE id NOT IN ({','.join('?' * len(ids))})", ids)
     return len(rows)
 
-def ingest(raw_path, avail_path, conn):
+def ingest(raw_path, avail_path, conn, as_date=None):
     """Offline/dev path: load the saved scrape files."""
     n = load_spaces(conn, read_stream(raw_path))
-    n_events = load_availability(conn, read_stream(avail_path))
+    n_events = load_availability(conn, read_stream(avail_path), as_date=as_date)
     return n, conn.execute("SELECT COUNT(*) FROM spaces WHERE has_availability=1").fetchone()[0], n_events
 
-def load_availability(conn, pages, fetched_at=None):
+def load_availability(conn, pages, fetched_at=None, as_date=None):
     """Atomically replace busy intervals for every date present in `pages` (list of 25Live availability payloads).
     All-or-nothing: if anything is malformed the transaction rolls back and the previous data stays live."""
     known = {x[0] for x in conn.execute("SELECT id FROM spaces")}
@@ -95,7 +95,7 @@ def load_availability(conn, pages, fetched_at=None):
     for av in pages:
         for s in av["subjects"]:
             if s["itemId"] not in known: continue
-            date = s["item_date"][:10]; dates[date] = fetched_at or av.get("lastupdate"); seen.add((s["itemId"], date))
+            date = as_date or s["item_date"][:10]; dates[date] = fetched_at or av.get("lastupdate"); seen.add((s["itemId"], date))
             for e in s.get("items", []):
                 # NB: event titles are deliberately NOT stored (privacy); only the busy interval + kind.
                 a, b = float(e["start"]), min(float(e["end"]), 24.0)
@@ -111,5 +111,12 @@ def load_availability(conn, pages, fetched_at=None):
     return len(rows)
 
 if __name__ == "__main__":
-    raw, av = sys.argv[1:3]
-    c = db.connect(); print("spaces=%d with_availability=%d busy_intervals=%d" % ingest(raw, av, c))
+    # --demo-today relabels the saved file's date as today so you can try the app without a live 25Live fetch.
+    # The busy times are NOT real for today; never use this for anything but local testing.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from . import config
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    demo = datetime.now(ZoneInfo(config.TIMEZONE)).date().isoformat() if "--demo-today" in sys.argv else None
+    c = db.connect(); print("spaces=%d with_availability=%d busy_intervals=%d" % ingest(args[0], args[1], c, as_date=demo))
+    if demo: print("WARNING: demo mode. Availability from the saved file is now labeled as", demo, "and is not real.")

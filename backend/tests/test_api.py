@@ -62,6 +62,7 @@ async def test_agent_loop_validates_ids(client):
     http = httpx.AsyncClient(transport=httpx.MockTransport(_fake_openrouter(calls)))
     conn = db.connect()
     out = await agent.recommend(conn, "room for 20 at 1pm", "2026-11-14", "11:00", {"2026-11-14": "2026-11-14T10:50:00"}, client=http)
+    assert all(c["max_tokens"] == 1000 for c in calls)  # cap so small OpenRouter balances still work
     assert len(out["recommendations"]) == 1  # hallucinated id dropped
     assert out["recommendations"][0]["space"]["max_capacity"] >= 20
     assert "Girls Who Code" not in json.dumps(calls)  # event titles never reach the LLM
@@ -157,3 +158,74 @@ async def test_agent_turns_http_error_into_provider_error(client):
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(404, json={"error": {"message": "No endpoints found that support tool use"}})))
     with pytest.raises(agent.ProviderError, match="404.*tool use"):
         await agent.recommend(db.connect(), "room for 4", "2026-11-14", "11:00", {}, client=http)
+
+
+def test_no_data_for_today_is_reported_not_silent(client, monkeypatch):
+    import datetime, zoneinfo
+    from app import agent, config, main
+    monkeypatch.setattr(main, "now_local", lambda: datetime.datetime(2026, 11, 20, 11, 0, tzinfo=zoneinfo.ZoneInfo("America/New_York")))
+    assert client.get("/meta").json()["has_current_data"] is False
+    async def boom(*a, **k): raise AssertionError("LLM must not be called when there is no data")
+    monkeypatch.setattr(agent, "recommend", boom); monkeypatch.setattr(config, "OPENROUTER_API_KEY", "x")
+    r = client.post("/agent/recommend", json={"query": "quiet room for 4"}).json()
+    assert r["recommendations"] == [] and "2026-11-14" in r["summary"] and "hasn" in r["summary"]
+
+def test_demo_today_relabels_saved_data(tmp_path):
+    from app import db, ingest, search
+    c = db.connect(str(tmp_path / "d.db")); ingest.ingest(f"{DATA}/raw_pages.txt", f"{DATA}/availability.txt", c, as_date="2026-12-01")
+    assert search.search(c, search.SearchParams(min_capacity=4), "2026-12-01")
+
+def test_doctor_reports_ok_and_problems(tmp_path, monkeypatch, capsys):
+    from app import config, db, ingest, doctor
+    path = str(tmp_path / "x.db"); monkeypatch.setattr(config, "DB_PATH", path)
+    assert doctor.main() == 1 and "no database yet" in capsys.readouterr().out
+    c = db.connect(path); ingest.ingest(f"{DATA}/raw_pages.txt", f"{DATA}/availability.txt", c)   # dated 2026-11-14, so "today" has none unless demo
+    c.close(); assert doctor.main() == 1 and "no availability for today" in capsys.readouterr().out
+    c = db.connect(path); ingest.ingest(f"{DATA}/raw_pages.txt", f"{DATA}/availability.txt", c, as_date=__import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo(config.TIMEZONE)).date().isoformat())
+    c.close(); assert doctor.main() == 0 and "OK:" in capsys.readouterr().out
+
+
+def _agent_handler(first_args, final, skip_tool_first=False):
+    def h(req):
+        msgs = json.loads(req.content)["messages"]
+        tool = [m for m in msgs if m["role"] == "tool"]
+        if not tool:
+            if skip_tool_first and not any("must call" in str(m.get("content")) for m in msgs):
+                return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Sure, how about the library?"}}]})
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "search_spaces", "arguments": json.dumps(first_args)}}]}}]})
+        results = json.loads(tool[-1]["content"])["results"]
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps(final(results))}}]})
+    return h
+
+async def _ask(handler):
+    from app import agent, db
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return await agent.recommend(db.connect(), "quiet room for 4", "2026-11-14", "11:00", {"2026-11-14": "x"}, client=http)
+
+@pytest.mark.asyncio
+async def test_agent_survives_null_affiliation_limit_and_string_ids(client):
+    h = _agent_handler({"min_capacity": 4, "affiliation": None, "limit": None, "start_time": "14:00", "end_time": "15:00"},
+                       lambda res: {"summary": "ok", "recommendations": [{"space_id": str(res[0]["id"]), "reason": "free"}]})
+    out = await _ask(h)
+    assert len(out["recommendations"]) == 1 and out["trace"][0]["matches"] > 0
+
+@pytest.mark.asyncio
+async def test_agent_falls_back_when_model_lists_nothing(client):
+    out = await _ask(_agent_handler({"min_capacity": 4}, lambda res: {"summary": "", "recommendations": []}))
+    assert len(out["recommendations"]) == 3
+
+@pytest.mark.asyncio
+async def test_agent_is_nudged_to_search_first(client):
+    out = await _ask(_agent_handler({"min_capacity": 4}, lambda res: {"summary": "ok", "recommendations": [{"space_id": res[0]["id"], "reason": "x"}]}, skip_tool_first=True))
+    assert len(out["recommendations"]) == 1
+
+
+def test_demo_mode_loads_sample_data_on_startup(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import config, main
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "d.db")); monkeypatch.setattr(config, "DEMO_MODE", True); monkeypatch.setattr(config, "DATA_DIR", DATA)
+    with TestClient(main.app) as c:
+        m = c.get("/meta").json()
+        assert m["has_current_data"] is True and m["demo_mode"] is True
+        assert len(c.get("/spaces", params={"amenities": "computers", "limit": 50}).json()) > 0
