@@ -46,7 +46,8 @@ async def recommend(conn, query, today, now, dates, affiliation=None, client=Non
     try:
         for _ in range(max_rounds):
             r = await client.post(config.OPENROUTER_URL, headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}", "X-Title": "ReserveCMU"},
-                                  json={"model": config.OPENROUTER_MODEL, "messages": msgs, "tools": [TOOL], "temperature": 0.2})
+                                  #json={"model": config.OPENROUTER_MODEL, "messages": msgs, "tools": [TOOL], "temperature": 0.2})
+                                  json={"model": config.OPENROUTER_MODEL, "messages": msgs, "tools": [TOOL], "temperature": 0.2, "max_tokens": 1000})
             if r.status_code >= 400: raise ProviderError(f"OpenRouter {r.status_code}: {_provider_msg(r)}")
             body = r.json()
             if "error" in body: raise ProviderError("OpenRouter: " + str(body["error"].get("message", body["error"]))[:200])
